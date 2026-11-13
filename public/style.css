@@ -1,0 +1,11 @@
+
+
+
+/* Approved archive records returned by the strict source allowlist. */
+.approved-record-list{display:grid;gap:12px;margin-top:16px;padding-top:14px;border-top:1px solid var(--line,rgba(255,255,255,.12))}
+.approved-record-list>b{font-size:.78rem;letter-spacing:.08em;text-transform:uppercase;opacity:.8}
+.approved-record{padding:12px;border:1px solid var(--line,rgba(255,255,255,.12));border-radius:12px;background:rgba(255,255,255,.025)}
+.approved-record strong,.approved-record small{display:block}
+.approved-record small{margin-top:4px;opacity:.7;font-size:.75rem}
+.approved-record p{margin:8px 0;font-size:.86rem}
+.approved-record a{font-size:.8rem}

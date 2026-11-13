@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en" dir="ltr">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <script>try{const lang=localStorage.getItem("eartify-language")==="ar"?"ar":"en";document.documentElement.lang=lang;document.documentElement.dir=lang==="ar"?"rtl":"ltr"}catch{}</script>
+  <title>EARTIFY | Solar System</title>
+  <link rel="stylesheet" href="/solar/solar.css">
+  <script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/"}}</script>
+</head>
+<body>
+  <header><a href="/" data-i18n="back">← Back to EARTIFY</a><b data-i18n="brand">EARTIFY · SOLAR SYSTEM</b></header>
+  <main>
+    <div class="intro"><span data-i18n="eyebrow">INTERACTIVE JOURNEY</span><h1 data-i18n="title">Explore <em>our universe</em></h1><p data-i18n="description">Explore the planets from afar, zoom in, and follow their motion through the Solar System.</p></div>
+    <div class="layout">
+      <aside>
+        <label data-i18n="planets">PLANETS & MOONS</label><div id="planet-list"></div>
+        <hr><label data-i18n="controls">SIMULATION CONTROLS</label>
+        <button id="pause" type="button" data-i18n="pause">⏸ Pause / Play</button>
+        <label for="speed" class="speed-label"><span data-i18n="orbitalSpeed">Orbital speed</span><output id="speed-out">1×</output></label>
+        <input id="speed" aria-label="Orbital speed" type="range" min=".01" max="100" step=".01" value="1">
+        <button id="orbits" type="button" data-i18n="orbits">Show / Hide orbits</button>
+        <button id="rotation" type="button" data-i18n="rotation">Stop planet rotation</button>
+      </aside>
+      <section><div id="scene"></div><div class="hint" data-i18n="hint">Drag to rotate the view · Scroll to zoom · Select a planet to focus the camera.</div></section>
+    </div>
+  </main>
+  <button class="cero-help-launch" id="ceroHelpLaunch" type="button" aria-expanded="false">🤖 <span data-i18n="askCero">اسأل Cero</span></button>
+  <aside class="cero-help-panel" id="ceroHelpPanel" hidden aria-label="Cero assistant">
+    <div class="cero-help-head"><b>Cero · EARTIFY</b><button id="ceroHelpClose" type="button" aria-label="Close">×</button></div>
+    <div class="cero-help-messages" id="ceroHelpMessages"><p>أهلاً! اسألني عن الكواكب أو التحكم في المجموعة الشمسية.</p></div>
+    <form id="ceroHelpForm"><input id="ceroHelpInput" required autocomplete="off" placeholder="اسأل عن أي كوكب…"><button type="submit">➤</button></form>
+  </aside>
+  <script type="module" src="/solar/solar.js"></script>
+</body>
+</html>
