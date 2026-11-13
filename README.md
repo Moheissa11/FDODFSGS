@@ -24,9 +24,9 @@ Without either AI key, the site and basic/offline guided responses remain availa
 - General conversation is not restricted to space topics.
 
 ### Research and scientific discovery
-- Scientific search is restricted by a strict allowlist to user-approved archives. Current live discovery connects NASA PDS and NASA Earthdata CMR; additional approved providers are registered with their integration status.
-- Cero scientific research turns can retrieve records only from the currently integrated approved archives. If those archives return no records, no unapproved fallback is used.
-- NASA Worldview imagery remains available through approved NASA GIBS map layers. The unapproved NASA Image Library and general encyclopedia lookup routes are disabled.
+- Scientific discovery lists only the approved NASA, CSA, ESA, and JAXA portals configured in the server allowlist. EARTIFY does not query Wikipedia, Crossref, arXiv, or other third-party scientific indexes.
+- Cero research turns can retrieve records from the same three providers. Results are treated as discovery leads, not proof that a full paper was independently verified.
+- Existing NASA imagery and planetary lookup features are preserved.
 - `research-core.js` splits documents into overlapping passages and provides lexical ranking.
 - `embedding-core.js` adds optional OpenAI embedding similarity blended with lexical relevance. If embeddings fail or are not configured, retrieval safely falls back to lexical search.
 
@@ -51,6 +51,7 @@ Without either AI key, the site and basic/offline guided responses remain availa
 - `OPENAI_API_KEY` — optional OpenAI chat fallback and semantic embeddings.
 - `OPENAI_MODEL` — OpenAI fallback chat model; defaults to `gpt-4o-mini`.
 - `OPENAI_EMBEDDING_MODEL` — defaults to `text-embedding-3-small`.
+- `NASA_API_KEY` — retained as a configuration placeholder for NASA APIs that require a key; current NTRS search is public and does not use it.
 - `PORT` — defaults to `3000`.
 
 Never put secrets in `public/`, commit `.env`, or share your API key in screenshots or chat. The server calls Gemini; the browser never receives the key.
@@ -62,9 +63,9 @@ Never put secrets in `public/`, commit `.env`, or share your API key in screensh
 - `GET /api/history`.
 - `GET /api/documents`, `POST /api/documents`, `DELETE /api/documents/:id`, `POST /api/documents/ask`.
 - `POST /api/robot-chat`, `POST /api/solve`, `POST /api/place-search`, `POST /api/compare-text`.
-- `GET /api/sources` — approved source registry and connection status.
-- `GET /api/research/search?q=...` — approved NASA PDS + NASA Earthdata CMR discovery only.
-- Legacy NASA NTRS and NASA Image Library search routes return HTTP 410 and are disabled by source policy.
+- `GET /api/research/search?q=...` — approved NASA, CSA, ESA, and JAXA portal discovery only.
+- `GET /api/research/ntrs?q=...` — NASA NTRS only.
+- `GET /api/nasa-images?q=...`.
 
 ## Test and validate
 
@@ -81,22 +82,16 @@ The tests cover intent/language hints, chunking/retrieval, document extraction h
 
 This is a strengthened local/student prototype, **not a production-hardened public service**. Before exposing it to the internet, replace the JSON-file database and demo account cap with a managed database, implement password reset/email verification and session expiry/revocation, use HTTPS and secure cookie configuration behind a correctly configured proxy, add durable distributed rate limiting, add backups and retention/deletion controls, review privacy/legal requirements, and perform a security audit. The current local JSON database is not designed for concurrent multi-instance hosting.
 
-The search APIs are external dependencies and can be rate-limited or change their response formats. Search results must be opened and checked before being cited as evidence. Crossref does not necessarily provide abstracts; arXiv and NASA records may contain metadata/abstracts rather than full text. Full paper retrieval, source-to-source contradiction analysis, OCR beyond the first 10 PDF pages, and a trained intent model are not included. No model fine-tuning has been performed. EARTIFY's 3D planets are educational visualizations, not validated scientific digital twins.
+EARTIFY portal discovery returns official allowlisted portal links, not guaranteed live dataset records. Users must run the native search on the official portal and verify dataset metadata before using measurements. EARTIFY must never fill missing scientific evidence from unapproved domains or model memory. Full paper retrieval, source-to-source contradiction analysis, OCR beyond the first 10 PDF pages, and a trained intent model are not included. No model fine-tuning has been performed. EARTIFY's 3D planets are educational visualizations, not validated scientific digital twins.
 
+## Live approved-source research (EARTIFY)
 
-## TerraTwin scientific tools
+The research endpoints now request records from official agency APIs instead of returning a list of portal links:
 
-The standalone NASA Data Explorer / Scientific Dataset Registry panel has been removed from the current build at the project owner's request. TerraTwin retains the Earth Analog Finder's automatic PDS and Earthdata metadata discovery, the Scientific Maps workspace (NASA GIBS Earth imagery plus bundled Mars/Moon reference basemaps), and the Mission Simulator. The removed registry UI and its `/api/nasa/catalog`, `/api/nasa/search`, and `/api/nasa/pds-search` endpoints are not part of this build. The separate `/api/nasa/gibs` map-service metadata endpoint remains.
+- NASA Earthdata Search: NASA Common Metadata Repository (CMR) collection search (`cmr.earthdata.nasa.gov`).
+- Copernicus Data Space: official STAC collections and item APIs (`stac.dataspace.copernicus.eu`).
+- NASA Planetary Data System: official PDS Search API (`pds.nasa.gov`).
 
-The unrelated standalone “Bring your sources / Add to your database / Ask your saved files / Search scientific literature” document-import panel was removed from the page. The separate TerraTwin research workspaces and the main scientific Research Lab remain.
+The UI renders returned record titles, abstracts/descriptions, source names, original record URLs, and the complete metadata object in an expandable panel. API errors and empty results are surfaced; EARTIFY does not replace missing records with invented data. All outbound scientific record URLs are checked against the configured approved-host allowlist.
 
-**Verification note (2026-11-13):** `node --check server.js`, `node --check public/app.js`, and `npm test` passed (20/20). Local `/api/health` returned HTTP 200. A live PDS request could not be verified from this environment because outbound fetch failed; test live PDS, Earthdata, NTRS and GIBS access from the deployment/network before claiming those external providers are operational. No NASA results are fabricated or substituted with samples.
-
-
-## TerraTwin live maps and NASA archive search
-
-The Scientific Maps workspace uses NASA GIBS WMTS for Earth satellite imagery, with selectable MODIS land-surface temperature, NDVI and VIIRS thermal-anomaly overlays. Mars and Moon views use bundled global surface textures with interactive pan/zoom. Calibrated planetary products are not presented as rendered measurements unless a verified ingestion path is implemented.
-
-
-### Cero smart navigation
-Cero understands common Arabic and English requests to open the 3D Solar System, focus a named planet or the Moon, or jump to Compare, TerraTwin, Mission Lab, Research, Explore, and Home. The Solar System page includes its own compact Cero help panel.
+Important coverage note: NASA Worldview, LRO Diviner archive, CSA RADARSAT/RCM, CSA SAR tutorial, ESA Open Science Catalog, and JAXA G-Portal remain approved source portals in the source registry, but this build does not claim live record retrieval from them unless their public machine-readable endpoint is integrated and verified. The CSA SAR tutorial is a processing guide, not a scientific dataset. Some archives may require accounts, specific query parameters, or authenticated access. These are not silently represented as successful API searches.

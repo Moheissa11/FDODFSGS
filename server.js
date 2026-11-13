@@ -17,8 +17,6 @@ const { extractUpload } = require("./document-extract");
 const { retrieveHybridPassages } = require("./embedding-core");
 const { detectLanguage, classifyIntent, classifyTeachingMode } = require("./assistant-core");
 const { retrieveRelevantPassages, splitIntoChunks } = require("./research-core");
-const { WEBSITE_KNOWLEDGE, getWebsiteHelpReply, getWebsiteNavigationIntent } = require("./website-knowledge");
-const { APPROVED_SOURCES, isApprovedSourceUrl } = require("./source-registry");
 const embeddingCache = new Map();
 const requestBuckets = new Map();
 
@@ -61,7 +59,18 @@ function authCookie(res,token){ const secure=process.env.NODE_ENV === "productio
 function publicUser(u){ return {id:u.id,email:u.email,name:u.name}; }
 function extractTextFromUpload(input){ return extractUpload(input); }
 
-const SOURCES = APPROVED_SOURCES.map(({name,url,category,status}) => ({name,url,note:`${category} · ${status}`}));
+const SOURCES = [
+  { name:"NASA Earthdata Search", url:"https://search.earthdata.nasa.gov/", note:"Approved portal for Earth observation datasets and terrestrial analog research", tags:["earth","terrestrial","soil","temperature","climate","vegetation","rain","land","earthdata"] },
+  { name:"NASA Worldview", url:"https://worldview.earthdata.nasa.gov/", note:"Approved visual portal for satellite imagery and environmental monitoring", tags:["earth","image","imagery","satellite","visual","weather","cloud","worldview"] },
+  { name:"NASA Planetary Data System (PDS)", url:"https://pds.nasa.gov/", note:"Approved archive for Moon, Mars, and planetary mission datasets", tags:["moon","mars","planet","lunar","rover","atmosphere","plasma","geology","pds"] },
+  { name:"LRO Diviner Lunar Data", url:"https://pds-geosciences.wustl.edu/", note:"Approved lunar surface temperature and polar-region data archive", tags:["moon","lunar","temperature","ice","polar","diviner"] },
+  { name:"CSA RADARSAT Constellation Mission data", url:"https://donnees-data.asc-csa.gc.ca/", note:"Approved Canadian radar Earth-observation data portal", tags:["radar","sar","cloud","ice","wind","disaster","radarsat","earth"] },
+  { name:"CSA RADARSAT-1 Archive", url:"https://donnees-data.asc-csa.gc.ca/", note:"Approved historical radar archive for environmental change analysis", tags:["radar","sar","history","historical","change","radarsat","earth"] },
+  { name:"CSA SAR Python Tutorial", url:"https://github.com/asc-csa/Synthetic_Aperture_Radar_Tutorial", note:"Approved processing tutorial; methodology only, not a dataset", tags:["radar","sar","python","qgis","processing","tutorial"] },
+  { name:"Copernicus Data Space Ecosystem", url:"https://dataspace.copernicus.eu/", note:"Approved Earth observation data and processing portal", tags:["earth","atmosphere","gas","humidity","pressure","land","ocean","copernicus"] },
+  { name:"ESA Open Science Catalog", url:"https://opensciencedata.esa.int/", note:"Approved catalog of open scientific datasets and workflows", tags:["science","catalog","experiment","geology","research","esa"] },
+  { name:"JAXA G-Portal", url:"https://www.gportal.jaxa.jp/?lang=en", note:"Approved Earth-observation portal for rainfall, snow, and vegetation products", tags:["rain","rainfall","snow","vegetation","plant","dry","precipitation","jaxa"] }
+];
 
 function send(res, status, data, type="application/json; charset=utf-8") {
   res.writeHead(status, {"Content-Type":type, "Cache-Control":"no-store", "X-Content-Type-Options":"nosniff", "Referrer-Policy":"same-origin"});
@@ -121,10 +130,10 @@ async function aiAnalysis(input) {
   const model = process.env.OPENAI_MODEL || "gpt-4o-mini";
   const prompt = `You are a cautious planetary mission research assistant for a student prototype.
 Analyze this user-supplied destination. Do not invent measurements or claim a source was checked if it was not.
-Clearly distinguish known facts, assumptions, and unknowns. Do not invent measurements. Use only the approved EARTIFY source registry; if no live record was retrieved, label the analysis conceptual and state that evidence is missing.
+Clearly distinguish known facts, assumptions, and unknowns. Use scientific data and source links exclusively from the approved EARTIFY allowlist. Never cite or rely on other domains or model memory for scientific measurements. If no approved dataset is available, state that no verified data was retrieved. Approved portals: ${JSON.stringify(SOURCES)}.
 Return ONLY valid JSON with keys: title, summary, comparison (array of {label,value}), risks (array of {level,name,detail}), solutions (array of strings), robot ({name,purpose,design,autonomy,limitation}), researchQueries (array of search phrases), sources (array of {name,url,note}), disclaimer.
 Destination: ${JSON.stringify(input)}
-Use only these approved source starting points where relevant: ${JSON.stringify(SOURCES)}
+Use these research starting points where relevant: ${JSON.stringify(SOURCES)}
 If no precise coordinates or dataset are supplied, say so and make recommendations conditional.`;
   const response = await fetch("https://api.openai.com/v1/chat/completions", {
     method:"POST",
@@ -139,6 +148,93 @@ If no precise coordinates or dataset are supplied, say so and make recommendatio
   return JSON.parse(data.choices?.[0]?.message?.content || "{}");
 }
 
+
+const APPROVED_HOSTS = new Set([
+  "cmr.earthdata.nasa.gov", "search.earthdata.nasa.gov", "worldview.earthdata.nasa.gov",
+  "pds.nasa.gov", "pds-geosciences.wustl.edu", "stac.dataspace.copernicus.eu",
+  "dataspace.copernicus.eu", "donnees-data.asc-csa.gc.ca", "www.gportal.jaxa.jp",
+  "opensciencedata.esa.int", "github.com"
+]);
+function approvedUrl(value) {
+  try { const u=new URL(value); return u.protocol==="https:" && APPROVED_HOSTS.has(u.hostname); } catch { return false; }
+}
+async function approvedJson(url, options={}) {
+  if(!approvedUrl(url)) throw new Error("Blocked non-approved scientific source.");
+  const response=await fetch(url,{...options,headers:{Accept:"application/json",...(options.headers||{})},signal:AbortSignal.timeout(22000)});
+  if(!response.ok) throw new Error(`Approved source returned HTTP ${response.status}`);
+  return response.json();
+}
+function normalizeRecord(source,title,description,url,metadata={}) {
+  return {source,title:title||"Untitled dataset",description:description||"No abstract supplied by the source.",url:approvedUrl(url)?url:source.url,metadata};
+}
+async function searchNasaEarthdata(query) {
+  const terms=normalizeSearchTerms(query);
+  const url=`https://cmr.earthdata.nasa.gov/search/collections.json?${new URLSearchParams({keyword:terms.join(" "),page_size:"20",sort_key:"-revision_date"})}`;
+  const data=await approvedJson(url);
+  return (data.items||[]).map(x=>normalizeRecord("NASA Earthdata Search",x.title,x.summary||x.description,x.links?.find(l=>l.rel===" via")?.href||`https://search.earthdata.nasa.gov/search?q=${encodeURIComponent(query)}`,{conceptId:x.id,shortName:x.short_name,version:x.version_id,provider:x.data_center,revisionDate:x.revision_date,temporal:x.time_start&&x.time_end?{start:x.time_start,end:x.time_end}:null,spatial:x.boxes||x.polygons,links:(x.links||[]).filter(l=>approvedUrl(l.href)).map(l=>({rel:l.rel,href:l.href}))}));
+}
+async function searchCopernicus(query) {
+  const base="https://stac.dataspace.copernicus.eu/v1";
+  const terms=normalizeSearchTerms(query);
+  const catalog=await approvedJson(`${base}/collections?q=${encodeURIComponent(terms.join(" "))}&limit=20`);
+  const collections=(catalog.collections||[]).slice(0,5);
+  const records=[];
+  for(const c of collections){
+    const search=await approvedJson(`${base}/collections/${encodeURIComponent(c.id)}/items?limit=8&sortby=-properties.datetime`).catch(()=>({features:[]}));
+    for(const f of (search.features||[])) records.push(normalizeRecord("Copernicus Data Space Ecosystem",f.properties?.title||f.id,f.properties?.description||c.description||c.title,`${base}/collections/${encodeURIComponent(c.id)}/items/${encodeURIComponent(f.id)}`,{collection:c.id,datetime:f.properties?.datetime,platform:f.properties?.platform,instruments:f.properties?.instruments,gsd:f.properties?.gsd,cloudCover:f.properties?.["eo:cloud_cover"],bbox:f.bbox,geometry:f.geometry,assets:Object.fromEntries(Object.entries(f.assets||{}).filter(([,a])=>approvedUrl(a.href)).map(([k,a])=>[k,{href:a.href,type:a.type,title:a.title}]))}));
+    if(!(search.features||[]).length) records.push(normalizeRecord("Copernicus Data Space Ecosystem",c.title,c.description,`${base}/collections/${encodeURIComponent(c.id)}`,{collection:c.id,keywords:c.keywords,license:c.license,extent:c.extent,summaries:c.summaries}));
+  }
+  return records;
+}
+function normalizeSearchTerms(query) {
+  const q=String(query||'').trim();
+  const aliases={
+    'المريخ':'Mars','كوكب المريخ':'Mars','سطح المريخ':'Mars surface','تربة المريخ':'Mars soil','غلاف المريخ':'Mars atmosphere','طقس المريخ':'Mars weather',
+    'القمر':'Moon','سطح القمر':'Moon surface','حرارة القمر':'lunar temperature','الأرض':'Earth','كوكب الأرض':'Earth',
+    'الصحراء الكبرى':'Sahara Desert','الصحراء':'desert','القاهرة':'Cairo','مصر':'Egypt','الإسكندرية':'Alexandria','اسكندرية':'Alexandria','الجيزة':'Giza','الأهرامات':'Giza pyramids','سيناء':'Sinai','جنوب سيناء':'South Sinai','شمال سيناء':'North Sinai','البحر الأحمر':'Red Sea','الغردقة':'Hurghada','شرم الشيخ':'Sharm El Sheikh','دهب':'Dahab','واحة سيوة':'Siwa Oasis','سيوة':'Siwa Oasis','أسوان':'Aswan','الأقصر':'Luxor','الوادي الجديد':'New Valley',
+    'القطب الجنوبي':'Antarctica','القارة القطبية الجنوبية':'Antarctica','جبل إيفرست':'Mount Everest','وادي رم':'Wadi Rum','البتراء':'Petra','جبل موسى':'Mount Sinai'
+  };
+  const direct=aliases[q.toLowerCase()];
+  if(direct)return [q,direct];
+  const transliterate=q.normalize('NFKD').replace(/[\u064B-\u065F\u0670]/g,'').replace(/[أإآ]/g,'ا').replace(/ى/g,'ي').replace(/ة/g,'ه');
+  const map={'ا':'a','ب':'b','ت':'t','ث':'th','ج':'j','ح':'h','خ':'kh','د':'d','ذ':'dh','ر':'r','ز':'z','س':'s','ش':'sh','ص':'s','ض':'d','ط':'t','ظ':'z','ع':'a','غ':'gh','ف':'f','ق':'q','ك':'k','ل':'l','م':'m','ن':'n','ه':'h','و':'w','ي':'y','ء':'','ؤ':'w','ئ':'y',' ':' '};
+  const latin=[...transliterate].map(ch=>map[ch]??ch).join('').replace(/\s+/g,' ').trim();
+  return [...new Set([q,latin].filter(Boolean))];
+}
+async function searchPds(query) {
+  // Search by free-text keywords and the canonical target name. PDS may return
+  // empty pages for some nodes; keep every returned product and its label metadata.
+  const terms=normalizeSearchTerms(query);
+  const requests=terms.slice(0,2).map(term=>{
+    const url=`https://pds.nasa.gov/api/search/1/products?${new URLSearchParams({keywords:term,limit:'30'})}`;
+    return approvedJson(url).catch(()=>null);
+  });
+  if(/mars|المريخ/i.test(query)) requests.push(approvedJson(`https://pds.nasa.gov/api/search/1/products?${new URLSearchParams({q:'target_name eq "Mars"',limit:'40'})}`).catch(()=>null));
+  if(/moon|lunar|القمر/i.test(query)) requests.push(approvedJson(`https://pds.nasa.gov/api/search/1/products?${new URLSearchParams({q:'target_name eq "Moon"',limit:'30'})}`).catch(()=>null));
+  const payloads=await Promise.all(requests);
+  const docs=payloads.flatMap(data=>data?.data||data?.results||data?.response?.docs||data?.products||[]);
+  const seen=new Set();
+  return docs.filter(x=>{const id=x.lidvid||x.lid||x.identifier||x.id||x.title;if(!id||seen.has(id))return false;seen.add(id);return true;})
+    .map(x=>normalizeRecord('NASA Planetary Data System (PDS)',x.title||x.name||x.product_name||x.lid||x.identifier,x.description||x.abstract||x.product_description||x.product_name||'PDS product record. Open the original agency record for its full product label and attached observational files.',x.url||x.href||`https://pds.nasa.gov/services/search/index.jsp?${new URLSearchParams({q:query})}`,x));
+}
+
+async function encyclopediaLookup(query) {
+  const clean=String(query||"").trim(); if(!clean) throw new Error("Enter something to search for.");
+  const terms=clean.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+  const ranked=SOURCES.map((source,index)=>({source,index,score:source.tags.reduce((n,tag)=>n+(terms.some(t=>tag.includes(t)||t.includes(tag))?1:0),0)})).sort((a,b)=>b.score-a.score||a.index-b.index);
+  const chosen=ranked.filter(x=>x.score>0).map(x=>x.source);
+  const earth=/earth|soil|terrestrial|climate|rain|vegetation|land|temperature|egypt|desert|antarctic|arctic|الأرض|تربة|مناخ|مطر|نبات|حرارة|مصر|صحراء|القاهرة|سيناء|البحر|مدينة|جبل|وادي|منطقة/i.test(clean);
+  const planetary=/moon|lunar|mars|rover|planet|geology|diviner|القمر|المريخ|كوكب|سطح/i.test(clean);
+  const jobs=[];
+  if(earth){jobs.push(["NASA Earthdata Search",()=>searchNasaEarthdata(clean)]);jobs.push(["Copernicus Data Space Ecosystem",()=>searchCopernicus(clean)]);}
+  if(planetary){jobs.push(["NASA Planetary Data System (PDS)",()=>searchPds(clean)]);}
+  if(!earth&&!planetary){jobs.push(["NASA Earthdata Search",()=>searchNasaEarthdata(clean)]);jobs.push(["Copernicus Data Space Ecosystem",()=>searchCopernicus(clean)]);jobs.push(["NASA Planetary Data System (PDS)",()=>searchPds(clean)]);}
+  const settled=await Promise.allSettled(jobs.map(([,fn])=>fn()));
+  const records=[];const errors=[];
+  settled.forEach((r,i)=>{if(r.status==="fulfilled")records.push(...r.value);else errors.push({source:jobs[i][0],error:r.reason?.message||"Source unavailable"});});
+  const portals=(chosen.length?chosen:SOURCES).filter(s=>approvedUrl(s.url));
+  return {query:clean,title:clean,found:records.length>0,records:records.slice(0,40),extract:records.length?`Retrieved ${records.length} live scientific record(s) directly from approved agency APIs. Each record includes source metadata and an official record link.`:"No matching live records were returned by the approved APIs. The official portals are provided for a manual search; no outside data or estimated measurements were substituted.",description:`Live approved-source search · ${records.length} record(s)`,thumbnail:"",url:records[0]?.url||portals[0]?.url||SOURCES[0].url,portals,source:"Live official agency APIs",errors,retrievedAt:new Date().toISOString()};
+}
 
 function looksLikeUnclearInput(message) {
   const text = String(message || '').trim();
@@ -165,8 +261,6 @@ function robotReply(message) {
   if (introducedName) return ar
     ? `تشرفت بيك يا ${introducedName}! 😊 نورت EARTIFY. أنا Cero، صاحبك في رحلة استكشاف الفضاء. تحب نبدأ بأي كوكب أو قمر؟`
     : `Nice to meet you, ${introducedName}! 😊 Welcome to EARTIFY. I’m Cero, your space buddy. Which planet or moon should we explore first?`;
-  const websiteHelp = getWebsiteHelpReply(message);
-  if (websiteHelp) return websiteHelp;
   if (looksLikeUnclearInput(message)) return ar
     ? 'معلش يا مستكشف، مش قادر أفهم الرسالة دي. ممكن توضح قصدك أو تعيد كتابة السؤال؟ 🤖'
     : "Sorry, explorer — I’m not sure what you mean. Could you rephrase your message or clarify your question? 🤖";
@@ -185,46 +279,39 @@ function robotReply(message) {
   if (/^(thanks|thank you|شكرا|شكرًا|تسلم)/i.test(q)) return ar
     ? 'العفو! 🌟 لو عندك سؤال تاني عن الفضاء أنا جاهز.'
     : "You’re welcome! 🌟 I’m here if you have another space question.";
-  if (/mars|المريخ|moon|القمر|earth|الأرض|saturn|زحل/.test(q)) return ar
-    ? 'علشان نلتزم بمصادرك المعتمدة، مش هعرض معلومة علمية من الذاكرة. شغّل البحث في TerraTwin أو Research Desk، وهجيب لك سجلات NASA PDS وNASA Earthdata المتاحة فقط، مع روابطها الأصلية.'
-    : 'To honor the approved-source-only policy, I will not provide scientific facts from memory. Run a search in TerraTwin or Research Desk and I will show only available NASA PDS and NASA Earthdata archive records with their original links.';
+  if (/mars|المريخ/.test(q)) return ar
+    ? 'المريخ كوكب صخري بارد، وغلافه الجوي رقيق ويتكوّن معظمه من ثاني أكسيد الكربون. توجد على سطحه آثار جيولوجية تشير إلى وجود مياه سائلة قديمًا. دي معلومات عامة وليست قراءة مباشرة لبيانات لحظية.\nمصدر موثوق: NASA — https://pds.nasa.gov/'
+    : 'Mars is a cold, rocky planet with a thin atmosphere made mostly of carbon dioxide. Its surface preserves geological evidence that liquid water existed there in the past. This is general background, not a live data reading.\nTrusted source: NASA — https://pds.nasa.gov/';
+  if (/moon|القمر/.test(q)) return ar
+    ? 'القمر لا يملك غلافًا جويًا كثيفًا مثل الأرض، لذلك تتغير حرارة سطحه بشدة بين النهار والليل، وتوجد مناطق قطبية مظللة باستمرار قد تحتوي على جليد مائي.\nمصدر موثوق: NASA — https://pds.nasa.gov/'
+    : 'The Moon has no thick atmosphere like Earth’s, so its surface temperature changes dramatically between day and night. Permanently shadowed polar regions may contain water ice.\nTrusted source: NASA — https://pds.nasa.gov/';
+  if (/saturn|زحل/.test(q)) return ar
+    ? 'زحل عملاق غازي مشهور بحلقاته الواسعة، وله عائلة كبيرة من الأقمار، من بينها تيتان وإنسيلادوس.\nمصدر موثوق: NASA — https://pds.nasa.gov/'
+    : 'Saturn is a gas giant famous for its broad rings. It has many moons, including Titan and Enceladus.\nTrusted source: NASA — https://pds.nasa.gov/';
+  if (/earth|الأرض/.test(q)) return ar
+    ? 'الأرض كوكب صخري يمتلك ماءً سائلًا على سطحه وغلافًا جويًا غنيًا بالنيتروجين والأكسجين. لو تقصد معلومة محددة—مثل الحرارة أو الغلاف الجوي أو المدار—حددها لي.\nمصدر موثوق: NASA — https://search.earthdata.nasa.gov/'
+    : 'Earth is a rocky planet with liquid water on its surface and an atmosphere rich in nitrogen and oxygen. If you want a specific detail—such as temperature, atmosphere, or orbit—tell me which one.\nTrusted source: NASA — https://search.earthdata.nasa.gov/';
   return ar
     ? 'أنا متخصص في الفضاء والكواكب والبعثات العلمية. مش عايز أخمّن إجابة مش مرتبطة بسؤالك؛ ممكن توضح سؤالك أو تذكر اسم الكوكب/القمر/المهمة اللي تقصدها؟ وللبيانات الموثوقة نبدأ بمصادر NASA وبيانات المهمات.'
     : "I specialize in space, planets, and scientific missions. I don’t want to guess or give you an unrelated answer. Could you clarify your question or tell me which planet, moon, or mission you mean? For reliable data, we can start with NASA and mission datasets.";
 }
-async function searchContextForChat(_message) {
-  // No encyclopedia or unapproved fallback source is queried.
-  return null;
+async function searchContextForChat(message) {
+  // Retrieve a concise encyclopedia record for named space destinations; this is
+  // supporting context, not a claim that NASA datasets were queried.
+  const q = String(message || '').trim();
+  if (!/(mars|moon|luna|earth|venus|mercury|jupiter|saturn|uranus|neptune|pluto|europa|titan|enceladus|المريخ|القمر|الأرض|الزهرة|عطارد|المشتري|زحل|أورانوس|نبتون)/i.test(q)) return null;
+  try { return await encyclopediaLookup(q); } catch (_) { return null; }
+}
+
+async function nasaImageSearch(q) {
+  const query=String(q||"").trim();
+  return [{title:"NASA Worldview — approved satellite imagery portal",description:"Open NASA Worldview to inspect official Earth-observation imagery. EARTIFY does not load imagery from outside the approved source list.",image:"",nasaUrl:"https://worldview.earthdata.nasa.gov/",query}];
 }
 
 
-async function searchApprovedArchives(query, limit=8) {
-  const clean=String(query||'').trim().slice(0,220);
-  if(clean.length<2) return {items:[],providers:{pds:false,earthdata:false}};
-  const jobs=await Promise.allSettled([
-    (async()=>{
-      const endpoint=new URL('https://pds.nasa.gov/api/search/1/products');
-      endpoint.searchParams.set('keywords',clean); endpoint.searchParams.set('limit',String(Math.min(15,limit)));
-      const response=await fetch(endpoint,{headers:{Accept:'application/json','User-Agent':'EARTIFY-TerraTwin/1.2'},signal:AbortSignal.timeout(20000)});
-      if(!response.ok) throw new Error(`NASA PDS returned ${response.status}`);
-      const payload=await response.json(); const rows=Array.isArray(payload)?payload:(payload.data||payload.results||payload.items||[]);
-      return rows.map(row=>{const p=row.properties||row;const get=(...keys)=>{for(const key of keys){const value=p[key]??row[key];if(value!=null)return Array.isArray(value)?value[0]:value;}return '';};const lid=get('lid','logical_identifier');const url=lid?`https://pds.nasa.gov/api/search/1/products/${encodeURIComponent(lid)}`:'https://pds.nasa.gov/';return {title:get('title')||lid||'PDS product',description:get('description')||'',extract:get('description')||'NASA PDS archive record; open the original record to inspect product details.',date:get('start_date_time'),id:lid,url,source:'NASA PDS',kind:'planetary-product'};}).filter(item=>isApprovedSourceUrl(item.url)).slice(0,limit);
-    })(),
-    (async()=>{
-      const endpoint=new URL('https://cmr.earthdata.nasa.gov/search/collections.json');
-      endpoint.searchParams.set('keyword',clean); endpoint.searchParams.set('page_size',String(Math.min(30,limit))); endpoint.searchParams.set('page_num','1');
-      const response=await fetch(endpoint,{headers:{Accept:'application/json','Client-Id':'EARTIFY-Approved-Source-Search'},signal:AbortSignal.timeout(20000)});
-      if(!response.ok) throw new Error(`NASA Earthdata CMR returned ${response.status}`);
-      const payload=await response.json();
-      return (payload.feed?.entry||[]).map(row=>({title:row.title||row.short_name||'Earth observation collection',description:row.summary||'',extract:row.summary||'NASA Earthdata collection metadata; measurements require opening the dataset and checking its variables and access services.',date:row.time_start||'',id:row.id,shortName:row.short_name,url:`https://search.earthdata.nasa.gov/search?q=${encodeURIComponent(row.short_name||row.title||clean)}`,source:'NASA Earthdata CMR',kind:'earth-collection'})).filter(item=>isApprovedSourceUrl(item.url)).slice(0,limit);
-    })()
-  ]);
-  const items=jobs.flatMap(job=>job.status==='fulfilled'?job.value:[]);
-  return {items,providers:{pds:jobs[0].status==='fulfilled',earthdata:jobs[1].status==='fulfilled'},errors:jobs.map((job,index)=>job.status==='rejected'?{source:index===0?'NASA PDS':'NASA Earthdata',message:job.reason?.message||'Unavailable'}:null).filter(Boolean),retrievedAt:new Date().toISOString()};
-}
 async function multiSourceResearchSearch(query, perSource=4) {
-  const result=await searchApprovedArchives(query,perSource);
-  return result;
+  const result=await encyclopediaLookup(query);
+  return {items:(result.records||[]).map(record=>({source:record.source,title:record.title,year:record.metadata?.year||record.metadata?.datetime||"",authors:record.metadata?.authors||[],url:record.url,abstract:record.description,metadata:record.metadata})),providers:{approvedPortals:true,externalProviders:false,liveRecords:true,errors:result.errors||[]}};
 }
 
 function appendUserConversation(userId, role, content) {
@@ -282,7 +369,6 @@ async function fetchPublicText(value) {
   }
 }
 
-
 const requestHandler = async (req,res) => {
   const url = new URL(req.url, `http://${req.headers.host || "localhost"}`);
   if (req.method === "OPTIONS") return send(res,204,{});
@@ -291,106 +377,7 @@ const requestHandler = async (req,res) => {
     try { if (new URL(req.headers.origin).host !== req.headers.host) return send(res,403,{error:"Cross-origin requests are not allowed."}); }
     catch { return send(res,403,{error:"Invalid request origin."}); }
   }
-  if (url.pathname === "/api/sources" && req.method === "GET") {
-    return send(res,200,{policy:"strict-allowlist",sources:APPROVED_SOURCES.map(({id,name,category,url,status})=>({id,name,category,url,status})),currentlyIntegrated:["nasa-earthdata-search","nasa-worldview","nasa-pds"],notice:"Only currently integrated approved sources are queried. Registered sources are not treated as connected until their official interfaces are implemented and tested."});
-  }
-  if (url.pathname === "/api/health") return send(res,200,{ok:true,aiEnabled:!!(process.env.GEMINI_API_KEY||process.env.OPENAI_API_KEY),aiProvider:process.env.GEMINI_API_KEY?"gemini":process.env.OPENAI_API_KEY?"openai":"guided",semanticSearchEnabled:!!process.env.OPENAI_API_KEY,documentFormats:["TXT","MD","CSV","JSON","XML","HTML","PDF","DOCX"],researchProviders:["NASA PDS","NASA Earthdata CMR"],sourcePolicy:"strict-allowlist",approvedSourceCount:APPROVED_SOURCES.length});
-
-
-  // TerraTwin discovery: NASA PDS planetary records + Earthdata Earth analog collections.
-  // Discovery returns metadata only. Numeric comparisons require compatible measurements.
-  if (url.pathname === "/api/terratwin/collect" && req.method === "GET") {
-    const world=String(url.searchParams.get("world")||"Both").trim().slice(0,30);
-    const target=String(url.searchParams.get("target")||"").trim().slice(0,120);
-    if (!["Mars","Moon","Both"].includes(world)) return send(res,400,{error:"Choose Mars, Moon, or Both."});
-    if (target.length<2) return send(res,400,{error:"Enter a target region or site name."});
-    const key=`${world}:${target.toLowerCase()}`;
-    globalThis.__terraTwinCache ||= new Map();
-    const prior=globalThis.__terraTwinCache.get(key);
-    if(prior && Date.now()-prior.at<30*60*1000) return send(res,200,{...prior.data,cached:true});
-    const worlds=world==="Both"?["Mars","Moon"]:[world];
-    const planetaryTasks=worlds.map(async planet=>{
-      const q=new URL("https://pds.nasa.gov/api/search/1/products");
-      q.searchParams.set("keywords",`${target} ${planet}`); q.searchParams.set("limit","15");
-      const r=await fetch(q,{headers:{Accept:"application/json","User-Agent":"EARTIFY-TerraTwin/1.1"},signal:AbortSignal.timeout(25000)});
-      if(!r.ok) throw new Error(`PDS ${planet} returned HTTP ${r.status}`);
-      const d=await r.json(), raw=Array.isArray(d)?d:(d.data||d.results||d.items||[]);
-      return raw.map(x=>{const p=x.properties||x;const get=(...ks)=>{for(const k of ks){const v=p[k]??x[k];if(v!=null)return Array.isArray(v)?v[0]:v;}return "";};
-        const lid=get("lid","logical_identifier");
-        return {name:get("title")||lid||"PDS product",description:get("description")||"",target:planet,mission:get("investigation_name","mission_name"),instrument:get("instrument_name","instrument"),dataType:get("product_class"),date:get("start_date_time"),id:lid,url:lid?`https://pds.nasa.gov/api/search/1/products/${encodeURIComponent(lid)}`:"https://pds.nasa.gov/",kind:"metadata",source:"NASA PDS"};
-      });
-    });
-    const tasks=await Promise.allSettled([
-      ...planetaryTasks,
-      (async()=>{
-        const q=new URL("https://cmr.earthdata.nasa.gov/search/collections.json");
-        q.searchParams.set("keyword",`${target} land surface temperature elevation geology soil moisture`);
-        q.searchParams.set("page_size","30"); q.searchParams.set("page_num","1");
-        const r=await fetch(q,{headers:{Accept:"application/json","Client-Id":"EARTIFY-TerraTwin"},signal:AbortSignal.timeout(20000)});
-        if(!r.ok) throw new Error(`Earthdata CMR returned HTTP ${r.status}`);
-        const d=await r.json();
-        return (d.feed?.entry||[]).map(x=>({name:x.title||x.short_name||"Earth observation collection",description:x.summary||"",target:"Earth",mission:(x.platform||[]).map(y=>y.short_name).join(", "),instrument:(x.instrument||[]).map(y=>y.short_name).join(", "),dataType:(x.data_format||[]).join(", "),date:x.time_start||"",id:x.id,shortName:x.short_name,url:`https://search.earthdata.nasa.gov/search?q=${encodeURIComponent(x.short_name||x.title||"")}`,kind:"collection",source:"NASA Earthdata CMR"}));
-      })()
-    ]);
-    const planetary=tasks.slice(0,worlds.length).flatMap(t=>t.status==="fulfilled"?t.value:[]);
-    const earth=tasks[worlds.length].status==="fulfilled"?tasks[worlds.length].value:[];
-    const errors=[];
-    tasks.slice(0,worlds.length).forEach((t,i)=>{if(t.status==="rejected")errors.push({source:`NASA PDS (${worlds[i]})`,message:t.reason?.message||"Unavailable"});});
-    if(tasks[worlds.length].status==="rejected")errors.push({source:"NASA Earthdata",message:tasks[worlds.length].reason?.message||"Unavailable"});
-    const data={world,target,planetary,earth,errors,retrievedAt:new Date().toISOString(),
-      analysis:{status:"metadata_only",message:"NASA archive metadata was discovered. Harmony can subset only supported Earth-observation collections. Planetary PDS products require product-specific access and compatible calibrated measurements before numeric Earth-vs-Mars/Moon comparisons are valid."},
-      provenance:"Live NASA PDS and Earthdata CMR archive metadata; each record links to its original archive."};
-    globalThis.__terraTwinCache.set(key,{at:Date.now(),data});
-    if(globalThis.__terraTwinCache.size>100)globalThis.__terraTwinCache.delete(globalThis.__terraTwinCache.keys().next().value);
-    if(!planetary.length&&!earth.length)return send(res,502,{error:"NASA archives could not return records for this search.",details:errors});
-    return send(res,200,data);
-  }
-
-  // Read collection-specific Harmony capabilities before offering any subsetting controls.
-  if (url.pathname === "/api/terratwin/capabilities" && req.method === "GET") {
-    const collectionId=String(url.searchParams.get("collectionId")||"").trim();
-    if(!/^(C\d{6,}-[A-Z0-9_-]+|[A-Z0-9][A-Z0-9_.-]{1,79})$/i.test(collectionId)) return send(res,400,{error:"Invalid NASA CMR collection ID or short name."});
-    try {
-      const endpoint=new URL("https://harmony.earthdata.nasa.gov/capabilities");
-      endpoint.searchParams.set("collectionId",collectionId);
-      const response=await fetch(endpoint,{headers:{Accept:"application/json","User-Agent":"EARTIFY-TerraTwin/1.1"},signal:AbortSignal.timeout(20000)});
-      if(!response.ok) return send(res,response.status===404?404:502,{error:`NASA Harmony capabilities returned HTTP ${response.status}. This collection may not be supported by Harmony.`});
-      const capabilities=await response.json();
-      const summary=capabilities.summary||{};
-      return send(res,200,{collectionId,shortName:capabilities.shortName||null,conceptId:capabilities.conceptId||collectionId,capabilities:{bboxSubset:!!(summary.bboxSubset??capabilities.bboxSubset),temporalSubset:!!(summary.temporalSubset??capabilities.temporalSubset),variableSubset:!!(summary.variableSubset??capabilities.variableSubset),outputFormats:summary.outputFormats||capabilities.outputFormats||[],services:capabilities.services||[],variables:capabilities.variables||[]},requiresEarthdataLogin:true,source:"NASA Harmony",documentation:"https://harmony.earthdata.nasa.gov/docs"});
-    } catch(error){return send(res,502,{error:"Could not retrieve NASA Harmony capabilities.",details:error.message});}
-  }
-
-  // Build a bounded, collection-specific Harmony subset URL. This does not download
-  // the result on the EARTIFY server; the user's Earthdata Login handles authorization.
-  if (url.pathname === "/api/terratwin/subset-url" && req.method === "GET") {
-    const collectionId=String(url.searchParams.get("collectionId")||"").trim();
-    const variable=String(url.searchParams.get("variable")||"all").trim().slice(0,120);
-    const west=Number(url.searchParams.get("west")),south=Number(url.searchParams.get("south")),east=Number(url.searchParams.get("east")),north=Number(url.searchParams.get("north"));
-    const start=String(url.searchParams.get("start")||"").trim(),end=String(url.searchParams.get("end")||"").trim();
-    if(!/^(C\d{6,}-[A-Z0-9_-]+|[A-Z0-9][A-Z0-9_.-]{1,79})$/i.test(collectionId)) return send(res,400,{error:"Invalid NASA collection ID."});
-    if(!variable||!/^[A-Za-z0-9_,.-]+$/.test(variable)) return send(res,400,{error:"Invalid variable name. Use a variable from the collection capabilities."});
-    if(![west,south,east,north].every(Number.isFinite)||west < -180||east > 180||west>=east||south < -90||north>90||south>=north) return send(res,400,{error:"Enter a valid bounding box: west < east and south < north."});
-    if(!/^\d{4}-\d{2}-\d{2}$/.test(start)||!/^\d{4}-\d{2}-\d{2}$/.test(end)||start>end) return send(res,400,{error:"Enter a valid date range in YYYY-MM-DD format."});
-    try {
-      const capUrl=new URL("https://harmony.earthdata.nasa.gov/capabilities");capUrl.searchParams.set("collectionId",collectionId);
-      const capRes=await fetch(capUrl,{headers:{Accept:"application/json"},signal:AbortSignal.timeout(15000)});
-      if(!capRes.ok)return send(res,502,{error:"Could not verify this collection's Harmony support."});
-      const caps=await capRes.json(),summary=caps.summary||{};
-      const bbox=!!(summary.bboxSubset??caps.bboxSubset),temporal=!!(summary.temporalSubset??caps.temporalSubset),variableOk=!!(summary.variableSubset??caps.variableSubset);
-      if(!bbox||!temporal)return send(res,422,{error:"This collection does not advertise both spatial and temporal subsetting in Harmony. Use its original archive access links instead.",capabilities:{bboxSubset:bbox,temporalSubset:temporal,variableSubset:variableOk}});
-      if(variable!=="all"&&variableOk&&Array.isArray(caps.variables)&&caps.variables.length){const names=caps.variables.map(v=>String(v.name||v.id||v.label||""));if(!names.some(n=>n===variable))return send(res,400,{error:"Variable was not found in this collection's advertised variable list."});}
-      const pathVariable=variableOk?variable:"all";
-      const endpoint=new URL(`https://harmony.earthdata.nasa.gov/${encodeURIComponent(collectionId)}/ogc-api-coverages/1.0.0/${encodeURIComponent(pathVariable)}/coverage/rangeset`);
-      endpoint.searchParams.append("subset",`lat(${south},${north})`);endpoint.searchParams.append("subset",`lon(${west},${east})`);endpoint.searchParams.append("subset",`time("${start}","${end}")`);
-      endpoint.searchParams.set("maxResults","10");
-      return send(res,200,{url:endpoint.toString(),collectionId,variable:pathVariable,boundingBox:{west,south,east,north},time:{start,end},maxResults:10,requiresEarthdataLogin:true,note:"NASA Harmony will process this request only if the selected collection's deployed service supports the requested axes and variable. The result may be an asynchronous job or a downloadable subset; it is not stored by EARTIFY.",source:"NASA Harmony"});
-    }catch(error){return send(res,502,{error:"Could not build the NASA subset request.",details:error.message});}
-  }
-
-  if (url.pathname === "/api/nasa/gibs" && req.method === "GET") {
-    return send(res,200,{source:"NASA GIBS",capabilities:"https://gibs.earthdata.nasa.gov/wmts/epsg4326/best/1.0.0/WMTSCapabilities.xml",tileTemplate:"https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/{layer}/default/{time}/{tileMatrixSet}/{z}/{y}/{x}.jpg",note:"GIBS is an Earth imagery service. Layer availability and dates vary; this does not make planetary PDS rasters directly renderable."});
-  }
+  if (url.pathname === "/api/health") return send(res,200,{ok:true,aiEnabled:!!(process.env.GEMINI_API_KEY||process.env.OPENAI_API_KEY),aiProvider:process.env.GEMINI_API_KEY?"gemini":process.env.OPENAI_API_KEY?"openai":"guided",semanticSearchEnabled:!!process.env.OPENAI_API_KEY,documentFormats:["TXT","MD","CSV","JSON","XML","HTML","PDF","DOCX"],researchProviders:["NASA Earthdata","NASA Worldview","NASA PDS","CSA","ESA Copernicus","ESA Open Science","JAXA G-Portal"]});
 
   if (url.pathname === "/api/auth/signup" && req.method === "POST") {
     try { const x=await readBody(req), email=String(x.email||"").trim().toLowerCase(), name=String(x.name||"").trim().slice(0,60), password=String(x.password||"");
@@ -444,37 +431,28 @@ const requestHandler = async (req,res) => {
   }
   if (url.pathname === "/api/place-search" && req.method === "POST") {
     try {
-      const input=await readBody(req);
-      if(!String(input.place||'').trim()) return send(res,400,{error:'Enter a place or thing to search for.'});
-      const [firstResult,secondResult]=await Promise.all([searchApprovedArchives(input.place,8),String(input.place2||'').trim()?searchApprovedArchives(input.place2,8):Promise.resolve(null)]);
-      const asCard=(query,result)=>({query,title:query,found:result.items.length>0,description:`Approved archives only · ${result.items.length} records`,extract:result.items.slice(0,5).map(item=>`${item.title}: ${item.extract}`).join('\n\n')||'No matching records were returned by the approved sources.',url:result.items[0]?.url||'https://search.earthdata.nasa.gov/',items:result.items,source:'EARTIFY approved-source registry',retrievedAt:result.retrievedAt,errors:result.errors});
-      const first=asCard(input.place,firstResult),second=secondResult?asCard(input.place2,secondResult):null;
-      const who=currentUser(req);if(who){db.history.push({id:crypto.randomUUID(),userId:who.id,query:[input.place,input.place2].filter(Boolean).join(' vs '),createdAt:new Date().toISOString()});saveDB();}
-      return send(res,200,{first,second,source:'EARTIFY approved-source registry',disclaimer:'Search is restricted to the approved NASA PDS and NASA Earthdata archives currently connected. Other user-approved sources are registered but will not appear until their official data interfaces are integrated. No external fallback is used.'});
-    } catch(e){return send(res,502,{error:e.message||'Approved-source search failed'});}
+      const input = await readBody(req);
+      if (!String(input.place || "").trim()) return send(res,400,{error:"Enter a place or thing to search for."});
+      const first = await encyclopediaLookup(input.place);
+      const second = String(input.place2 || "").trim() ? await encyclopediaLookup(input.place2) : null;
+      const who=currentUser(req); if(who){db.history.push({id:crypto.randomUUID(),userId:who.id,query:[input.place,input.place2].filter(Boolean).join(" vs "),createdAt:new Date().toISOString()});saveDB();}
+      return send(res,200,{first,second,source:"Live official agency APIs",disclaimer:first.records?.length?`Retrieved ${first.records.length} live record(s) from approved agency sources. Full metadata and source links are shown below.`:"No matching records were returned by the approved live APIs. No third-party data was used."});
+    } catch(e) { return send(res,502,{error:e.message||"Research lookup failed"}); }
   }
   if (url.pathname === "/api/compare-text" && req.method === "POST") {
     try {
-      const input=await readBody(req);
-      if(!String(input.first||'').trim()||!String(input.second||'').trim()) return send(res,400,{error:'Enter both items to compare.'});
-      const [a,b]=await Promise.all([searchApprovedArchives(input.first,8),searchApprovedArchives(input.second,8)]);
-      const asCard=(query,result)=>({query,title:query,description:`Approved archives only · ${result.items.length} records`,extract:result.items.slice(0,5).map(item=>`${item.title}: ${item.extract}`).join('\n\n')||'No matching records were returned by the approved sources.',url:result.items[0]?.url||'https://search.earthdata.nasa.gov/',items:result.items});
-      return send(res,200,{first:asCard(input.first,a),second:asCard(input.second,b),source:'EARTIFY approved-source registry',disclaimer:'Both searches used only approved NASA PDS and NASA Earthdata endpoints. Missing results are not filled from other websites.'});
-    } catch(e){return send(res,502,{error:e.message||'Approved-source comparison failed'});}
+      const input = await readBody(req);
+      if (!String(input.first || "").trim() || !String(input.second || "").trim()) return send(res,400,{error:"Enter both items to compare."});
+      const [first, second] = await Promise.all([encyclopediaLookup(input.first), encyclopediaLookup(input.second)]);
+      const who=currentUser(req); if(who){db.history.push({id:crypto.randomUUID(),userId:who.id,query:`${input.first} vs ${input.second}`,createdAt:new Date().toISOString()});saveDB();}
+      return send(res,200,{first,second,source:"EARTIFY approved source registry",disclaimer:(first.offline || second.offline) ? "Internet connection is unavailable; built-in NASA topic references are shown for recognized Solar System objects." : "A comparison of approved scientific source portals; open each official portal to inspect its native datasets."});
+    } catch(e) { return send(res,502,{error:e.message||"Comparison search failed"}); }
   }
   if (url.pathname === "/api/robot-chat" && req.method === "POST") {
     try {
       const input=await readBody(req); const message=String(input.message||"").trim().slice(0,1200);
       if(!message) return send(res,400,{error:"Type a message first."});
       const signedIn=currentUser(req);
-      const siteLanguage=input.siteLanguage === "ar" ? "ar" : "en";
-      const storedWebsiteHelp=getWebsiteHelpReply(message,siteLanguage);
-      const navigation=getWebsiteNavigationIntent(message);
-      if(storedWebsiteHelp || navigation) {
-        const guideReply=storedWebsiteHelp || (siteLanguage==='ar' ? 'حاضر! هفتح لك القسم المناسب في EARTIFY، وبعدها أقدر أساعدك تستخدمه خطوة بخطوة.' : 'Absolutely. I’ll open the relevant EARTIFY section, then help you use it step by step.');
-        if(signedIn){appendUserConversation(signedIn.id,"user",message);appendUserConversation(signedIn.id,"assistant",guideReply);saveDB();}
-        return send(res,200,{reply:guideReply,mode:"website-guide",source:"built-in EARTIFY help",navigation});
-      }
       if(looksLikeUnclearInput(message)) return send(res,200,{reply:robotReply(message),mode:"clarify"});
       const aiProvider=process.env.GEMINI_API_KEY?"gemini":process.env.OPENAI_API_KEY?"openai":"guided";
       if(aiProvider==="guided") {
@@ -496,26 +474,25 @@ const requestHandler = async (req,res) => {
       const replyLanguage=hasArabicScript ? "Egyptian Arabic" : looksArabizi ? "Egyptian Arabic (Arabizi-aware; answer in Arabic script unless the user consistently writes Franco)" : "English";
       const detectedIntent=classifyIntent(rawMessage);
       let researchResults={items:[],providers:{}};
-      if(detectedIntent==="scientific_research" || /\b(nasa|pds|earthdata|scientific|dataset|research|بيانات|ناسا|بحث علمي)\b/i.test(rawMessage)) {
+      if(detectedIntent==="scientific_research" || /\b(nasa|scientific paper|research paper|earthdata|pds|copernicus|radarsat|jaxa)\b/i.test(rawMessage)) {
         try { researchResults=await multiSourceResearchSearch(rawMessage,3); } catch (_) { researchResults={items:[],providers:{}}; }
       }
       const teachingMode=classifyTeachingMode(rawMessage);
       const teachingRequested=detectedIntent==="explanation" || /(step.?by.?step|i don.t understand|why does|how does|واحدة واحدة|خطوة بخطوة)/i.test(rawMessage);
-      const systemPrompt=`${WEBSITE_KNOWLEDGE}\n\nThe website language selected in the browser is ${siteLanguage}. For help with the interface, use the exact section and control names from the guide above. Reply in the language used by the user; mention UI labels in the website language where useful. Never invent unavailable features.\n\nDetected intent hint: ${detectedIntent}. Teaching depth hint: ${teachingMode}. These are fallible hints; follow the actual message and conversation, not the labels. You are Cero, EARTIFY's conversational AI, patient teacher, and careful research assistant. Reply in ${replyLanguage}; match the user's register naturally. Understand typos, informal wording, dialect, Arabizi, code-switching, short follow-ups, pronouns, and references using the conversation history. Do not assume two similar spellings always mean the same thing; use context and ask one concise clarification when intent remains genuinely ambiguous.
+      const systemPrompt=`Detected intent hint: ${detectedIntent}. Teaching depth hint: ${teachingMode}. These are fallible hints; follow the actual message and conversation, not the labels. You are Cero, EARTIFY's conversational AI, patient teacher, and careful research assistant. Reply in ${replyLanguage}; match the user's register naturally. Understand typos, informal wording, dialect, Arabizi, code-switching, short follow-ups, pronouns, and references using the conversation history. Do not assume two similar spellings always mean the same thing; use context and ask one concise clarification when intent remains genuinely ambiguous.
 
 GENERAL CONVERSATION: Help with broad everyday, educational, technical, creative, and scientific questions, not only space. Be natural, relevant, non-repetitive, and answer the actual request. Keep simple requests concise; do not pad.
 
 TEACHING: When the user wants to learn, ${teachingRequested ? "use a thorough step-by-step teaching approach for this turn." : "adapt the depth to their wording and demonstrated level."} Start from the prerequisite idea when needed; teach one concept at a time; explain what it means and WHY it works; define technical terms; show every meaningful algebra/calculation step; give a worked example and explain common mistakes. For math/physics identify givens, required quantity, formula and why it applies, substitution, calculation, units, and a reasonableness check. Do not skip transformations. If the learner says they are confused, change the explanation and example instead of repeating the same wording. For practice, ask one question at a time and wait for the answer; do not reveal the answer when they asked to try independently. Check understanding naturally without turning every answer into a quiz. Avoid an overwhelming wall of text: use clear stages and pause at a sensible point.
 
-RESEARCH SOURCE POLICY (MANDATORY): When searching for scientific or planetary data, use only the EARTIFY approved-source registry supplied in context and the live records retrieved from NASA PDS / NASA Earthdata. Never use Wikipedia, NASA NTRS, Crossref, arXiv, Google, general web search, or any unlisted source as a fallback. If the approved sources return no records, say that no matching data was returned; do not fill gaps from memory or another source. Cite the exact approved archive record URL and identify metadata as metadata, not as a calibrated measurement. Clearly distinguish retrieved evidence, general background knowledge, hypotheses, estimates, and unknowns. Never invent a paper, DOI, citation, measurement, search, or URL. Only say a source was searched if it was actually retrieved. If the supplied context is insufficient, say exactly what is missing and suggest a primary source. Do not treat an encyclopedia summary as primary mission data.
+RESEARCH: For current or specialized scientific claims, retrieve evidence when tools are available. When approved NASA, CSA, ESA, or JAXA portal records are supplied, cite exact record titles, source names, and URLs in your answer; describe them as search results, not as proof that the full paper was independently verified. Prefer NASA, NASA NTRS, NASA PDS, ESA, and peer-reviewed sources. Clearly distinguish retrieved evidence, general background knowledge, hypotheses, estimates, and unknowns. Never invent a paper, DOI, citation, measurement, search, or URL. Only say a source was searched if it was actually retrieved. Scientific data and source links must come exclusively from this allowlist: NASA Earthdata Search (https://search.earthdata.nasa.gov/), NASA Worldview (https://worldview.earthdata.nasa.gov/), NASA PDS (https://pds.nasa.gov/), LRO Diviner archive (https://pds-geosciences.wustl.edu/), CSA data portal (https://donnees-data.asc-csa.gc.ca/), CSA SAR tutorial (https://github.com/asc-csa/Synthetic_Aperture_Radar_Tutorial), Copernicus Data Space (https://dataspace.copernicus.eu/), ESA Open Science Catalog (https://opensciencedata.esa.int/), and JAXA G-Portal (https://www.gportal.jaxa.jp/?lang=en). Never cite, link, retrieve, or use scientific data from any other domain. If an approved portal does not return data, state that no verified data was retrieved; do not fill gaps from other sources or model memory. If the supplied context is insufficient, say exactly what is missing and suggest a primary source. Do not treat an encyclopedia summary as primary mission data.
 
 CONTEXT & PRIVACY: Use only the conversation history provided for this user. Resolve follow-up references from it. Never claim persistent memory across accounts or sessions. Do not reveal secrets or credentials. If asked to perform an action, use an available tool or clearly state what cannot be done.
 
 STYLE: Be patient, encouraging, accurate, and specific. Never shame mistakes. Do not force every response into a space topic. Avoid generic filler and repetitive greetings. If uncertain, be transparent rather than pretending.`;
       const context=[
-        `Approved scientific sources (strict allowlist): ${JSON.stringify(APPROVED_SOURCES.map(({name,url,status,category})=>({name,url,status,category})))}`,
-        evidence?.found ? `Retrieved background reference (Wikipedia summary, not a NASA dataset): ${JSON.stringify({title:evidence.title,extract:evidence.extract,url:evidence.url})}` : "No unapproved reference source was queried.",
-        researchResults.items.length ? `Scientific archive records retrieved live from approved NASA PDS and NASA Earthdata sources: ${JSON.stringify(researchResults.items)}` : "No live scientific records were retrieved for this turn.",
+        evidence?.found ? `Retrieved approved-source portal references (not raw measurements): ${JSON.stringify({title:evidence.title,extract:evidence.extract,url:evidence.url})}` : "No approved portal references were retrieved.",
+        researchResults.items.length ? `Scientific records retrieved live from approved agency portals: ${JSON.stringify(researchResults.items)}` : "No live scientific records were retrieved for this turn.",
         docContext ? `Relevant passages from this signed-in user's saved documents:\n${docContext}` : "No relevant passages were retrieved from the user's saved documents."
       ].join("\n\n");
       let reply="";
@@ -534,22 +511,26 @@ STYLE: Be patient, encouraging, accurate, and specific. Never shame mistakes. Do
       }
       if(!reply) reply=messageLanguage(message)==="ar" ? "معلش، النموذج مرجعش إجابة واضحة. جرّب تسألني تاني." : "Sorry, the model did not return a usable answer. Please try again.";
       if(signedIn){appendUserConversation(signedIn.id,"user",message);appendUserConversation(signedIn.id,"assistant",reply);saveDB();}
-      return send(res,200,{reply,mode:"ai",provider:aiProvider,reference:evidence?.found?{name:evidence.title,url:evidence.url}:null,research:researchResults.items,researchProviders:researchResults.providers,sourcePolicy:"strict-allowlist",approvedSources:APPROVED_SOURCES.map(({id,name,url,status})=>({id,name,url,status}))});
+      return send(res,200,{reply,mode:"ai",provider:aiProvider,reference:evidence?.found?{name:evidence.title,url:evidence.url}:null,research:researchResults.items,researchProviders:researchResults.providers});
     } catch(e){return send(res,502,{error:e.message||"Chat failed"});}
   }
   if (url.pathname === "/api/research/search" && req.method === "GET") {
-    const query=String(url.searchParams.get('q')||'').trim();
-    if(query.length<3) return send(res,400,{error:'Enter at least 3 characters to search the approved scientific archives.'});
-    try {
-      const result=await searchApprovedArchives(query,8);
-      return send(res,200,{query,...result,sourcePolicy:'strict-allowlist',approvedSources:APPROVED_SOURCES.map(({id,name,url,status})=>({id,name,url,status})),notice:result.items.length?'Results are archive metadata from approved NASA sources only. Verify each product, variables, units, calibration, and access conditions before scientific comparison.':'No records were returned by the currently integrated approved sources. No outside source was queried.'});
-    } catch(e){return send(res,502,{error:'Approved archive search failed.',details:e.message});}
+    const query=String(url.searchParams.get("q")||"").trim();
+    if(query.length<3) return send(res,400,{error:"Enter at least 3 characters to search approved scientific data portals."});
+    const result=await encyclopediaLookup(query);
+    return send(res,200,{query,items:result.records||[],providers:{approvedPortals:true,externalProviders:false,liveRecords:true,errors:result.errors||[]},retrievedAt:result.retrievedAt,notice:result.extract});
   }
   if (url.pathname === "/api/research/ntrs" && req.method === "GET") {
-    return send(res,410,{error:'NASA NTRS is not in the approved source list. This endpoint is disabled to enforce the source policy.',sourcePolicy:'strict-allowlist'});
+    const query=String(url.searchParams.get("q")||"").trim();
+    if(query.length<3) return send(res,400,{error:"Enter at least 3 characters to search approved planetary data portals."});
+    const result=await encyclopediaLookup(query);
+    return send(res,200,{query,items:result.records||[],source:"Live official agency APIs",errors:result.errors||[],retrievedAt:result.retrievedAt,notice:result.extract});
   }
   if (url.pathname === "/api/nasa-images") {
-    return send(res,410,{error:'NASA Image Library is not in the approved source list. Use the approved NASA Worldview / GIBS map layers instead.',sourcePolicy:'strict-allowlist'});
+    try {
+      const q = url.searchParams.get("q") || "Mars rover";
+      return send(res,200,{items:await nasaImageSearch(q)});
+    } catch(e) { return send(res,502,{error:e.message}); }
   }
   let pathname = decodeURIComponent(url.pathname === "/" ? "/index.html" : url.pathname);
   // Serve directory routes (e.g. /solar/ or /solar) with their index.html.

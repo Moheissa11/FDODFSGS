@@ -9,8 +9,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
-  <link rel="stylesheet" href="/styles.css?v=terratwin-live-maps-2" />
+  <link rel="stylesheet" href="/styles.css?v=space-search-1" />
 </head>
 <body>
   <div class="space-noise"></div>
@@ -20,7 +19,7 @@
     <nav class="nav">
       <a href="#explore" data-i18n="navExplore">Explore</a>
       <a href="#compare" data-i18n="navCompare">3D Explorer</a>
-      <a href="#terratwin" data-i18n="terraNav">TerraTwin</a>
+      <a href="#library" data-i18n="libraryNav">Search</a>
       <a href="#mission" data-i18n="navMission">Mission Lab</a>
       <a href="#research" data-i18n="navResearch">Research</a>
     </nav>
@@ -77,8 +76,8 @@
           <div class="world-bottom"><div><h3 data-i18n="mars">Mars</h3><p data-i18n="marsDesc">Dusty. Cold. Full of questions.</p></div><button class="round-arrow select-world" data-place="Mars" aria-label="Explore Mars">↗</button></div>
         </article>
         <article class="world-card custom-card reveal lift">
-          <div class="custom-orb">＋</div><div class="card-index">WORLD 03 / YOUR NEXT TARGET</div>
-          <div class="world-bottom"><div><h3 data-i18n="yourWorld">Your world.</h3><p data-i18n="yourWorldDesc">Bring a location into focus.</p></div><a class="round-arrow" href="#compare" aria-label="Add a destination">↗</a></div>
+          <button class="custom-orb" id="addWorldButton" type="button" aria-label="Add your next destination">＋</button><div class="card-index" id="customWorldIndex">WORLD 03 / YOUR NEXT TARGET</div>
+          <div class="world-bottom"><div><h3 id="customWorldTitle" data-i18n="yourWorld">Your world.</h3><p id="customWorldDesc" data-i18n="yourWorldDesc">Bring a location into focus.</p></div><a class="round-arrow" id="customWorldArrow" href="#compare" aria-label="Add a destination">↗</a></div>
         </article>
       </div>
     </section>
@@ -100,47 +99,21 @@
       <div class="comparison-result hidden" id="comparisonResult" aria-live="polite"></div>
     </section>
 
-    <section class="terratwin-section section" id="terratwin">
-      <div class="section-kicker">03 — <span data-i18n="terraKicker">TERRATWIN · ANALOG DISCOVERY</span></div>
-      <div class="section-heading"><h2 data-i18n="terraTitle">Find Earth’s<br><em>planetary twins.</em></h2><p data-i18n="terraIntro">A research workspace for comparing Earth environments with selected regions on Mars and the Moon. Scientific outputs stay disabled until verified datasets are supplied.</p></div>
-      <div class="terra-grid">
-        <article class="terra-card terra-wide">
-          <div class="terra-card-head"><span>01 / ANALOG FINDER</span><b data-i18n="dataPending">DATASET REQUIRED</b></div>
-          <h3 data-i18n="analogTitle">Earth Analog Finder</h3><p data-i18n="analogDesc">Search NASA archives automatically for planetary and Earth-observation datasets. EARTIFY discovers and stores source metadata; verified measurements are required before scientific similarity scores can be calculated.</p>
-          <div class="terra-controls"><label><span data-i18n="targetWorld">Target world</span><select id="analogWorld"><option value="Both" selected>Both · Mars + Moon</option><option value="Mars">Mars</option><option value="Moon">Moon</option></select></label><label><span data-i18n="targetRegion">Target region / site</span><input id="analogTarget" placeholder="e.g. Jezero Crater"></label><button class="primary-btn" id="runAnalog" type="button" data-i18n="runAnalog">Analyze analogs</button></div>
-          <p class="terra-note" id="analogStatus" aria-live="polite" data-i18n="analogWaiting">No scientific dataset loaded. No similarity scores will be invented.</p><div id="analogResults" class="terra-results"></div>
-          <form id="harmonySubsetForm" class="harmony-subset-form">
-            <div class="terra-card-head"><span>NASA EARTHDATA · PARTIAL ACCESS</span><b>OPTIONAL SUBSET</b></div>
-            <p class="terra-note">Choose an Earth observation collection from the results and check its actual NASA Harmony capabilities first. This tool only builds a request for supported collections.</p>
-            <input type="hidden" id="harmonyCollectionId" value="">
-            <div class="terra-controls subset-grid">
-              <label>West longitude <input id="subsetWest" type="number" min="-180" max="180" step="any" value="34"></label>
-              <label>South latitude <input id="subsetSouth" type="number" min="-90" max="90" step="any" value="29"></label>
-              <label>East longitude <input id="subsetEast" type="number" min="-180" max="180" step="any" value="36"></label>
-              <label>North latitude <input id="subsetNorth" type="number" min="-90" max="90" step="any" value="31"></label>
-              <label>Start date <input id="subsetStart" type="date" value="2024-01-01" required></label>
-              <label>End date <input id="subsetEnd" type="date" value="2024-01-31" required></label>
-              <label>Variable <input id="subsetVariable" type="text" value="all" placeholder="all or exact variable name"></label>
-              <button class="primary-btn" id="buildSubsetRequest" type="submit" disabled>Build NASA subset request</button>
-            </div>
-            <p class="terra-note" id="harmonySubsetStatus" aria-live="polite">First search NASA collections, then select “Check Harmony support” on a collection.</p>
-            <div id="harmonySubsetLink" class="terra-results"></div>
-          </form>
-        </article>
-        <article class="terra-card">
-          <div class="terra-card-head"><span>02 / SCIENTIFIC MAPS</span><b>MAP WORKSPACE</b></div><h3 data-i18n="mapTitle">Interactive map layers</h3><p data-i18n="mapDesc">Prepare side-by-side Earth and planetary map views. Toggle the layers you want to inspect.</p>
-          <div class="map-toolbar"><label>Surface <select id="scienceMapWorld"><option value="Earth">Earth · NASA satellite</option><option value="Mars">Mars · global surface</option><option value="Moon">Moon · global surface</option></select></label><label>NASA layer <select id="scienceMapLayer"><option value="base">Natural color / surface imagery</option><option value="thermal">Land surface temperature</option><option value="vegetation">Vegetation index (NDVI)</option><option value="fires">Thermal anomalies / fires</option></select></label></div>
-          <div class="map-layer-list"><label><input type="checkbox" id="mapBaseToggle" checked> <span>Base imagery</span></label><label><input type="checkbox" id="mapDataToggle" checked> <span>NASA science overlay</span></label></div>
-          <div id="scienceMap" class="science-map" role="region" aria-label="Interactive planetary map"><div class="map-loading">Loading interactive map…</div></div><div class="terra-note" id="mapStatus" aria-live="polite">NASA GIBS satellite layers for Earth. Mars and Moon show global surface imagery; calibrated MOLA / LOLA products remain linked to their original archives.</div>
-        </article>
-        <article class="terra-card">
-          <div class="terra-card-head"><span>03 / MISSION PLANNING</span><b>SCREENING TOOL</b></div><h3 data-i18n="simTitle">Mission Simulator</h3><p data-i18n="simDesc">Run an early planning screen using the mission assumptions you enter. This is not a validated engineering or crew-safety model.</p>
-          <form id="missionSimForm" class="terra-controls sim-controls"><label><span data-i18n="missionDays">Mission duration (days)</span><input id="simDays" type="number" min="1" max="1000" value="30" required></label><label><span data-i18n="powerBudget">Available power (kWh/day)</span><input id="simPower" type="number" min="0" step="0.1" placeholder="Enter known value" required></label><label><span data-i18n="powerNeed">Estimated demand (kWh/day)</span><input id="simNeed" type="number" min="0" step="0.1" placeholder="Enter known value" required></label><label><span data-i18n="terrainSlope">Maximum route slope (degrees)</span><input id="simSlope" type="number" min="0" max="90" step="0.1" placeholder="Optional"></label><button class="primary-btn" type="submit" data-i18n="runSimulation">Run planning screen</button></form><div id="simResults" class="terra-results" aria-live="polite"></div>
-        </article>
-
+    <section class="standard-compare-section section" id="library">
+      <div class="section-kicker">03 — <span data-i18n="libraryKicker">SPACE SEARCH</span></div>
+      <div class="section-heading"><h2 data-i18n="libraryTitle">Search the universe.<br><em>Find your next discovery.</em></h2><p data-i18n="libraryDesc">Search planets, moons, locations, and space objects. EARTIFY will gather a quick research brief for you.</p></div>
+      <div class="compare-panel library-panel quick-search-panel">
+        <div class="form-top"><div><span class="form-label" data-i18n="libraryAdd">EXPLORE THE DATABASE</span><h3 data-i18n="libraryHeading">What do you want to discover?</h3></div><span class="form-tag">EARTIFY SEARCH</span></div>
+        <form id="quickSearchForm" class="quick-search-form">
+          <label for="quickSearchQuery"><span data-i18n="quickSearchLabel">Search planets, moons, missions, or places</span></label>
+          <div class="quick-search-row">
+            <input id="quickSearchQuery" type="search" minlength="2" required autocomplete="off" placeholder="e.g. Mars, Europa, James Webb, lunar water…">
+            <button class="primary-btn" type="submit" id="quickSearchButton"><span data-i18n="quickSearchButton">Search</span><b>↗</b></button>
+          </div>
+        </form>
+        <div id="quickSearchResults" class="quick-search-results hidden" aria-live="polite"></div>
       </div>
     </section>
-
     <section class="mission-section section" id="mission">
       <div class="section-kicker reveal">04 — <span data-i18n="missionKicker">FROM PROBLEM TO POSSIBILITY</span></div>
       <div class="mission-layout">
@@ -166,21 +139,22 @@
 
     <section class="research-section section" id="research">
       <div class="research-card reveal">
-        <div><div class="section-kicker">04 — RESEARCH DESK</div><h2 data-i18n="researchTitle">Curiosity needs<br><em>credible sources.</em></h2><p data-i18n="researchText">Explore only the approved scientific archives. Search results are archive records; open the original record and verify its variables, units, and context.</p></div>
+        <div><div class="section-kicker">04 — RESEARCH DESK</div><h2 data-i18n="researchTitle">Curiosity needs<br><em>credible sources.</em></h2><p data-i18n="researchText">EARTIFY restricts scientific discovery to the approved NASA, CSA, ESA, and JAXA portals listed below. No outside scientific databases are used.</p></div>
         <div class="research-links">
-          <a href="https://search.earthdata.nasa.gov/" target="_blank" rel="noreferrer"><span>NASA / EARTH OBSERVATION</span><b>Earthdata Search ↗</b></a>
-          <a href="https://worldview.earthdata.nasa.gov/" target="_blank" rel="noreferrer"><span>NASA / MAP IMAGERY</span><b>Worldview ↗</b></a>
-          <a href="https://pds.nasa.gov/" target="_blank" rel="noreferrer"><span>NASA / PLANETARY ARCHIVE</span><b>Planetary Data System ↗</b></a>
-          <a href="https://pds-geosciences.wustl.edu/" target="_blank" rel="noreferrer"><span>LRO / DIVINER</span><b>PDS Geosciences Node ↗</b></a>
-        </div>
-        <div class="approved-source-registry-wrap">
-          <span class="section-kicker">APPROVED SOURCE REGISTRY</span>
-          <div id="approvedSourceList" class="approved-source-registry" aria-live="polite"><p class="disclaimer">Loading approved sources…</p></div>
+          <a href="https://search.earthdata.nasa.gov/" target="_blank" rel="noreferrer"><span>NASA / EARTH</span><b>Earthdata Search ↗</b></a>
+          <a href="https://worldview.earthdata.nasa.gov/" target="_blank" rel="noreferrer"><span>NASA / IMAGERY</span><b>Worldview ↗</b></a>
+          <a href="https://pds.nasa.gov/" target="_blank" rel="noreferrer"><span>NASA / PLANETARY</span><b>Planetary Data System ↗</b></a>
+          <a href="https://pds-geosciences.wustl.edu/" target="_blank" rel="noreferrer"><span>NASA / LUNAR</span><b>LRO Diviner Lunar Data ↗</b></a>
+          <a href="https://donnees-data.asc-csa.gc.ca/" target="_blank" rel="noreferrer"><span>CSA / RADAR</span><b>RADARSAT Data Portal ↗</b></a>
+          <a href="https://github.com/asc-csa/Synthetic_Aperture_Radar_Tutorial" target="_blank" rel="noreferrer"><span>CSA / METHODS</span><b>SAR Python Tutorial ↗</b></a>
+          <a href="https://dataspace.copernicus.eu/" target="_blank" rel="noreferrer"><span>ESA / EARTH</span><b>Copernicus Data Space ↗</b></a>
+          <a href="https://opensciencedata.esa.int/" target="_blank" rel="noreferrer"><span>ESA / RESEARCH</span><b>Open Science Catalog ↗</b></a>
+          <a href="https://www.gportal.jaxa.jp/?lang=en" target="_blank" rel="noreferrer"><span>JAXA / EARTH</span><b>G-Portal ↗</b></a>
         </div>
       </div>
       <div class="image-search reveal">
-        <div><span class="form-label">NASA WORLDVIEW / GIBS</span><h3 data-i18n="imageSearchTitle">Explore approved Earth imagery.</h3></div>
-        <form id="imageSearchForm"><input id="imageQuery" value="NASA Worldview map layers" aria-label="NASA Worldview map layers" disabled><button class="outline-btn lift" type="submit" data-i18n="searchImages">View map layers ↗</button></form>
+        <div><span class="form-label">NASA WORLDVIEW · APPROVED IMAGERY</span><h3 data-i18n="imageSearchTitle">Bring the universe closer.</h3></div>
+        <form id="imageSearchForm"><input id="imageQuery" value="Mars rover" aria-label="Search NASA images"><button class="outline-btn lift" type="submit" data-i18n="searchImages">Search images ↗</button></form>
         <div id="imageResults" class="image-results"></div>
       </div>
     </section>
@@ -207,6 +181,6 @@
     </span>
   </button>
   <button class="edge-peek" id="edgePeek" type="button" aria-label="Open Cero chat"><span class="peek-antenna"></span><span class="peek-face"><i></i><b></b></span><span class="peek-fingers"><i></i><i></i><i></i><i></i></span></button>
-  <script src="/app.js?v=nova-command-dashboard-1"></script>
+  <script src="/app.js?v=space-search-1"></script>
 </body>
 </html>
